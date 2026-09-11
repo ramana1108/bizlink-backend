@@ -1,24 +1,25 @@
+import "dotenv/config";
 import nodemailer from "nodemailer";
 import { generateSubmissionPdf, generateCandidatePdf } from "./pdfService.js";
 
 let transporter = null;
 
 /**
- * Returns a configured Nodemailer Transporter specifically for Titan Mail SMTP (smtp.titan.email:465)
+ * Returns a configured Nodemailer transporter for the configured SMTP provider.
  */
 export function getTransporter() {
   if (!transporter) {
-    const host = process.env.SMTP_HOST || "smtp.titan.email";
-    const port = parseInt(process.env.SMTP_PORT || "465", 10);
+    const host = process.env.SMTP_HOST || "smtpout.secureserver.net";
+    const port = Number(process.env.SMTP_PORT || 465);
     const secure = process.env.SMTP_SECURE === "true" || port === 465;
-    const user = process.env.SMTP_USER || "career@profectusbizlink.com";
-    const pass = process.env.SMTP_PASS;
+    const user = process.env.EMAIL_USER || process.env.SMTP_USER || "career@profectusbizlink.com";
+    const pass = process.env.EMAIL_PASS || process.env.SMTP_PASS;
 
-    if (pass && pass !== "YOUR_TITAN_PASSWORD") {
+    if (pass && pass !== "YOUR_TITAN_PASSWORD" && pass !== "YOUR_MAILBOX_PASSWORD") {
       transporter = nodemailer.createTransport({
         host,
         port,
-        secure, // true for port 465 SSL
+        secure,
         auth: {
           user,
           pass,
@@ -31,18 +32,21 @@ export function getTransporter() {
       // Development console fallback when password is not yet entered in .env
       transporter = {
         sendMail: async (mailOptions) => {
-          console.log("\n================ [TITAN MAIL SMTP (DEV / CONSOLE MODE)] ================");
+          console.log("\n================ [SMTP DEV / CONSOLE MODE] ================");
           console.log(`From:        ${mailOptions.from}`);
           console.log(`To:          ${mailOptions.to}`);
           console.log(`Subject:     ${mailOptions.subject}`);
           console.log(`Attachments: ${mailOptions.attachments ? mailOptions.attachments.map((a) => a.filename).join(", ") : "None"}`);
           console.log(`Body:\n${mailOptions.text || mailOptions.html}`);
           console.log("========================================================================\n");
-          return { messageId: `dev-titan-${Date.now()}` };
+          return { messageId: `dev-bizlink-${Date.now()}` };
         },
-        verify: async () => {
-          console.log("ℹ️ [Titan Mail SMTP] SMTP_PASS not set in .env. Running in development mode.");
-          return true;
+        verify: (callback) => {
+          console.log("ℹ️ [SMTP] EMAIL_PASS / SMTP_PASS not set in .env. Running in development mode.");
+          if (typeof callback === "function") {
+            callback(null, true);
+          }
+          return Promise.resolve(true);
         },
       };
     }
@@ -51,30 +55,25 @@ export function getTransporter() {
 }
 
 /**
- * Verifies the Titan Mail SMTP connection and logs the result to terminal
+ * Verifies the configured SMTP connection and logs the result to terminal
  */
-export async function verifyTitanSmtpConnection() {
-  try {
-    const transport = getTransporter();
-    if (transport && typeof transport.verify === "function") {
-      await transport.verify();
-      console.log(`✓ [Titan Mail SMTP] Connected & verified successfully! (Host: ${process.env.SMTP_HOST || "smtp.titan.email"}:${process.env.SMTP_PORT || "465"}, Account: ${process.env.SMTP_USER || "career@profectusbizlink.com"})`);
-      return { success: true };
-    }
-  } catch (error) {
-    console.error("\n=======================================================");
-    console.error("✗ [Titan Mail SMTP Connection Warning]");
-    console.error("  Error Code:   ", error.code || "UNKNOWN");
-    console.error("  Error Message:", error.message);
-    if (error.code === "EAUTH") {
-      console.error("  -> Action Needed: Verify your Titan Mail password in backend/.env (SMTP_PASS)");
-    } else if (error.code === "ECONNECTION" || error.code === "ETIMEDOUT") {
-      console.error("  -> Action Needed: Check your internet connection or firewall access to smtp.titan.email:465");
-    }
-    console.error("=======================================================\n");
-    return { success: false, error: error.message };
+export function verifySmtpConnection(callback) {
+  const transport = getTransporter();
+  if (transport && typeof transport.verify === "function") {
+    transport.verify((error, success) => {
+      if (error) {
+        console.error("SMTP configuration error:", error.message || error);
+      } else {
+        console.log("SMTP server is ready");
+      }
+      if (typeof callback === "function") {
+        callback(error, success);
+      }
+    });
   }
 }
+
+export const verifyTitanSmtpConnection = verifySmtpConnection;
 
 /**
  * Formats a Date object as YYYY-MM-DD for unique filenames
@@ -88,14 +87,15 @@ function getFormattedDate(d = new Date()) {
 }
 
 /**
- * Notifies Titan Mail operations desk and candidate of a new application with attached PDF
+ * Notifies operations desk and candidate of a new application with attached PDF
  * @param {object} candidate - Saved candidate document
  */
 export async function notifyNewCandidateApplication(candidate) {
   try {
     const transport = getTransporter();
-    const adminEmail = process.env.MAIL_TO || process.env.OPERATIONS_EMAIL || process.env.NOTIFICATION_EMAIL || "career@profectusbizlink.com";
-    const senderEmail = `"PROFECTUS BIZLINK" <${process.env.SMTP_USER || "career@profectusbizlink.com"}>`;
+    const adminEmail = process.env.MAIL_TO || process.env.OPERATIONS_EMAIL || process.env.NOTIFICATION_EMAIL || process.env.EMAIL_USER || process.env.SMTP_USER || "career@profectusbizlink.com";
+    const senderAddress = process.env.EMAIL_USER || process.env.SMTP_USER || "career@profectusbizlink.com";
+    const senderEmail = `"Profectus BizLink" <${senderAddress}>`;
 
     // 1. Generate Candidate Profile PDF
     let pdfBuffer = null;
@@ -214,8 +214,9 @@ export async function notifyNewCandidateApplication(candidate) {
 export async function notifyNewRFQ(rfq) {
   try {
     const transport = getTransporter();
-    const adminEmail = process.env.MAIL_TO || process.env.OPERATIONS_EMAIL || process.env.NOTIFICATION_EMAIL || "career@profectusbizlink.com";
-    const senderEmail = `"PROFECTUS BIZLINK" <${process.env.SMTP_USER || "career@profectusbizlink.com"}>`;
+    const adminEmail = process.env.MAIL_TO || process.env.OPERATIONS_EMAIL || process.env.NOTIFICATION_EMAIL || process.env.EMAIL_USER || process.env.SMTP_USER || "career@profectusbizlink.com";
+    const senderAddress = process.env.EMAIL_USER || process.env.SMTP_USER || "career@profectusbizlink.com";
+    const senderEmail = `"Profectus BizLink" <${senderAddress}>`;
 
     // 1. Generate Corporate Form Submission PDF
     let pdfBuffer = null;

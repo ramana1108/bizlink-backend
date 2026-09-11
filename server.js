@@ -1,14 +1,12 @@
+import "dotenv/config";
 import express from "express";
 import cors from "cors";
-import dotenv from "dotenv";
 import connectDB from "./config/db.js";
 import rfqRoutes from "./routes/rfqRoutes.js";
 import candidateRoutes from "./routes/candidateRoutes.js";
 import resumeRoutes from "./routes/resumeRoutes.js";
 import emailRoutes from "./routes/emailRoutes.js";
-import { verifyTitanSmtpConnection } from "./services/notificationService.js";
-
-dotenv.config();
+import { verifySmtpConnection, verifyTitanSmtpConnection } from "./services/notificationService.js";
 
 const app = express();
 

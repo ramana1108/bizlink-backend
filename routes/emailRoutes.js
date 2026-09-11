@@ -21,7 +21,8 @@ router.post("/send-otp", async (req, res) => {
     const result = await sendEmailOtp(email);
 
     if (!result.success) {
-      return res.status(429).json(result);
+      const statusCode = result.resendAfter ? 429 : 500;
+      return res.status(statusCode).json(result);
     }
 
     return res.status(200).json(result);
@@ -29,7 +30,7 @@ router.post("/send-otp", async (req, res) => {
     console.error("Send OTP error:", error);
     return res.status(500).json({
       success: false,
-      message: error.message || "Failed to send verification code. Please try again.",
+      message: "Unable to send verification email. Please try again later.",
     });
   }
 });
