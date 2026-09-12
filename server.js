@@ -6,7 +6,7 @@ import rfqRoutes from "./routes/rfqRoutes.js";
 import candidateRoutes from "./routes/candidateRoutes.js";
 import resumeRoutes from "./routes/resumeRoutes.js";
 import emailRoutes from "./routes/emailRoutes.js";
-import { verifySmtpConnection, verifyTitanSmtpConnection } from "./services/notificationService.js";
+import { verifyEmailService } from "./services/emailService.js";
 
 const app = express();
 
@@ -18,8 +18,8 @@ app.use(express.urlencoded({ extended: true }));
 // MongoDB Connection
 connectDB();
 
-// Verify Titan Mail SMTP Connection on startup
-verifyTitanSmtpConnection();
+// Verify Brevo HTTPS Email API Configuration on startup
+verifyEmailService();
 
 // API Routes
 app.use("/api/rfq", rfqRoutes);
@@ -31,7 +31,7 @@ app.use("/api/email", emailRoutes);
 // Health check / Welcome route
 app.get("/", (req, res) => {
   res.json({
-    message: "PROFECTUS BIZLINK Backend API is running with Titan Mail SMTP!",
+    message: "PROFECTUS BIZLINK Backend API is running with Brevo HTTPS Email API!",
     endpoints: {
       rfq: "/api/rfq",
       candidates: "/api/candidates",

@@ -1,7 +1,7 @@
 import "dotenv/config";
 import crypto from "crypto";
 import jwt from "jsonwebtoken";
-import { getTransporter } from "./notificationService.js";
+import { sendEmailViaBrevo } from "./emailService.js";
 
 // ============================================================
 // IN-MEMORY OTP STORE
@@ -33,7 +33,7 @@ const MAX_ATTEMPTS = 3;
 // POST /api/email/send-otp
 //
 // Generates a secure 6-digit OTP and sends it to the exact
-// email address entered by the candidate.
+// email address entered by the candidate via Brevo HTTPS API.
 // ============================================================
 export async function sendEmailOtp(email) {
   // ----------------------------------------------------------
@@ -88,20 +88,13 @@ export async function sendEmailOtp(email) {
   });
 
   // ----------------------------------------------------------
-  // ----------------------------------------------------------
   // Compose OTP email
   // ----------------------------------------------------------
-  const senderEmail = process.env.EMAIL_USER || process.env.SMTP_USER || process.env.EMAIL_FROM || process.env.SMTP_FROM || "career@profectusbizlink.com";
-
-  const mailOptions = {
-    from: `"Profectus BizLink" <${senderEmail}>`,
-    
-    // IMPORTANT:
-    // This sends the OTP to the candidate's entered email.
+  const mailPayload = {
+    // Sends the OTP to the candidate's entered email.
     to: normalizedEmail,
 
-    subject:
-      "Your Email Verification OTP - Profectus BizLink Candidate Portal",
+    subject: "Your Email Verification OTP - Profectus BizLink Candidate Portal",
 
     // Plain-text version
     text: `
@@ -262,15 +255,14 @@ If you did not request this verification code, you can safely ignore this email.
   };
 
   // ----------------------------------------------------------
-  // SEND EMAIL THROUGH TITAN/GODADDY SMTP
+  // SEND EMAIL THROUGH BREVO HTTPS API
   // ----------------------------------------------------------
   try {
     console.log(`[OTP] Sending verification email to: ${normalizedEmail}`);
 
-    const transport = getTransporter();
-    const info = await transport.sendMail(mailOptions);
+    const result = await sendEmailViaBrevo(mailPayload);
 
-    console.log(`[OTP] Email sent successfully. Message ID: ${info?.messageId || 'N/A'}`);
+    console.log(`[OTP] Email dispatched successfully. ID: ${result?.messageId || "N/A"}`);
 
     return {
       success: true,

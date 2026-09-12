@@ -60,11 +60,11 @@ router.post("/", async (req, res) => {
 
     console.log("RFQ saved successfully:", savedRFQ._id);
 
-    // 3. Dispatch Email Notifications with PDF via Titan Mail
+    // 3. Dispatch Email Notifications with PDF via Brevo HTTPS API
     try {
       await notifyNewRFQ(savedRFQ);
     } catch (emailErr) {
-      console.error("[RFQ Submission - Titan Email Error] Email dispatch encountered an error:", emailErr.message);
+      console.error("[RFQ Submission - Brevo Email Error] Email dispatch encountered an error:", emailErr.message);
     }
 
     return res.status(201).json({

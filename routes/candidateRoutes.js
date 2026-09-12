@@ -111,11 +111,11 @@ async function handleCandidateSubmission(req, res) {
     console.log("========== CANDIDATE SAVED SUCCESSFULLY ==========");
     console.log(`Database ID: ${savedCandidate._id}`);
 
-    // 5. Send Notification Alert with PDF to Merchant & Candidate via Titan Mail
+    // 5. Send Notification Alert with PDF to Merchant & Candidate via Brevo HTTPS API
     try {
       await notifyNewCandidateApplication(savedCandidate);
     } catch (emailErr) {
-      console.error("[Candidate Submission - Titan Email Error] Email dispatch encountered an error:", emailErr.message);
+      console.error("[Candidate Submission - Brevo Email Error] Email dispatch encountered an error:", emailErr.message);
     }
 
     return res.status(201).json({

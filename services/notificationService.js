@@ -1,79 +1,18 @@
 import "dotenv/config";
-import nodemailer from "nodemailer";
 import { generateSubmissionPdf, generateCandidatePdf } from "./pdfService.js";
+import {
+  sendEmailViaBrevo,
+  verifyEmailService,
+  verifySmtpConnection,
+  verifyTitanSmtpConnection,
+} from "./emailService.js";
 
-let transporter = null;
-
-/**
- * Returns a configured Nodemailer transporter for the configured SMTP provider.
- */
-export function getTransporter() {
-  if (!transporter) {
-    const host = process.env.SMTP_HOST || "smtpout.secureserver.net";
-    const port = Number(process.env.SMTP_PORT || 465);
-    const secure = process.env.SMTP_SECURE === "true" || port === 465;
-    const user = process.env.EMAIL_USER || process.env.SMTP_USER || "career@profectusbizlink.com";
-    const pass = process.env.EMAIL_PASS || process.env.SMTP_PASS;
-
-    if (pass && pass !== "YOUR_TITAN_PASSWORD" && pass !== "YOUR_MAILBOX_PASSWORD") {
-      transporter = nodemailer.createTransport({
-        host,
-        port,
-        secure,
-        auth: {
-          user,
-          pass,
-        },
-        connectionTimeout: 15000,
-        greetingTimeout: 15000,
-        socketTimeout: 20000,
-      });
-    } else {
-      // Development console fallback when password is not yet entered in .env
-      transporter = {
-        sendMail: async (mailOptions) => {
-          console.log("\n================ [SMTP DEV / CONSOLE MODE] ================");
-          console.log(`From:        ${mailOptions.from}`);
-          console.log(`To:          ${mailOptions.to}`);
-          console.log(`Subject:     ${mailOptions.subject}`);
-          console.log(`Attachments: ${mailOptions.attachments ? mailOptions.attachments.map((a) => a.filename).join(", ") : "None"}`);
-          console.log(`Body:\n${mailOptions.text || mailOptions.html}`);
-          console.log("========================================================================\n");
-          return { messageId: `dev-bizlink-${Date.now()}` };
-        },
-        verify: (callback) => {
-          console.log("ℹ️ [SMTP] EMAIL_PASS / SMTP_PASS not set in .env. Running in development mode.");
-          if (typeof callback === "function") {
-            callback(null, true);
-          }
-          return Promise.resolve(true);
-        },
-      };
-    }
-  }
-  return transporter;
-}
-
-/**
- * Verifies the configured SMTP connection and logs the result to terminal
- */
-export function verifySmtpConnection(callback) {
-  const transport = getTransporter();
-  if (transport && typeof transport.verify === "function") {
-    transport.verify((error, success) => {
-      if (error) {
-        console.error("SMTP configuration error:", error.message || error);
-      } else {
-        console.log("SMTP server is ready");
-      }
-      if (typeof callback === "function") {
-        callback(error, success);
-      }
-    });
-  }
-}
-
-export const verifyTitanSmtpConnection = verifySmtpConnection;
+// Export verification helpers for backward compatibility
+export {
+  verifyEmailService,
+  verifySmtpConnection,
+  verifyTitanSmtpConnection,
+};
 
 /**
  * Formats a Date object as YYYY-MM-DD for unique filenames
@@ -88,14 +27,19 @@ function getFormattedDate(d = new Date()) {
 
 /**
  * Notifies operations desk and candidate of a new application with attached PDF
+ * Uses Brevo HTTPS Transactional Email API.
  * @param {object} candidate - Saved candidate document
  */
 export async function notifyNewCandidateApplication(candidate) {
   try {
-    const transport = getTransporter();
-    const adminEmail = process.env.MAIL_TO || process.env.OPERATIONS_EMAIL || process.env.NOTIFICATION_EMAIL || process.env.EMAIL_USER || process.env.SMTP_USER || "career@profectusbizlink.com";
-    const senderAddress = process.env.EMAIL_USER || process.env.SMTP_USER || "career@profectusbizlink.com";
-    const senderEmail = `"Profectus BizLink" <${senderAddress}>`;
+    const adminEmail =
+      process.env.MAIL_TO ||
+      process.env.OPERATIONS_EMAIL ||
+      process.env.NOTIFICATION_EMAIL ||
+      process.env.BREVO_SENDER_EMAIL ||
+      process.env.EMAIL_USER ||
+      process.env.SMTP_USER ||
+      "career@profectusbizlink.com";
 
     // 1. Generate Candidate Profile PDF
     let pdfBuffer = null;
@@ -113,16 +57,14 @@ export async function notifyNewCandidateApplication(candidate) {
     const attachments = pdfBuffer
       ? [
           {
-            filename: pdfFilename,
+            name: pdfFilename,
             content: pdfBuffer,
-            contentType: "application/pdf",
           },
         ]
       : [];
 
     // 2. Notification to Operations Desk (career@profectusbizlink.com)
-    const adminMailOptions = {
-      from: senderEmail,
+    const adminEmailPayload = {
       to: adminEmail,
       subject: `New BIZLINK Website Submission - ${candidateName}`,
       text: `A new candidate application has been received via the PROFECTUS BIZLINK website. Please find the complete application details attached as a PDF.\n\nCandidate Name: ${candidate.name}\nEmail: ${candidate.email}\nPhone: ${candidate.phone}\nQualification: ${candidate.qualification || "—"}\nRole: ${candidate.jobFunction || candidate.jobTitle || "—"}\nLocation: ${candidate.city || ""}, ${candidate.state || ""}`,
@@ -153,7 +95,7 @@ export async function notifyNewCandidateApplication(candidate) {
             </div>
           </div>
           <div style="background: #F6F8FC; padding: 12px 20px; font-size: 11px; color: #94A3B8; text-align: center;">
-            Profectus BizLink Titan Mail Automated Dispatch
+            Profectus BizLink Brevo HTTPS Automated Dispatch
           </div>
         </div>
       `,
@@ -161,8 +103,7 @@ export async function notifyNewCandidateApplication(candidate) {
     };
 
     // 3. Acknowledgment to Candidate
-    const candidateMailOptions = {
-      from: senderEmail,
+    const candidateEmailPayload = {
       to: candidate.email,
       subject: "Application Received - Profectus BizLink Candidate Portal",
       html: `
@@ -191,32 +132,40 @@ export async function notifyNewCandidateApplication(candidate) {
     };
 
     const deliveryResults = await Promise.allSettled([
-      transport.sendMail(adminMailOptions),
-      transport.sendMail(candidateMailOptions),
+      sendEmailViaBrevo(adminEmailPayload),
+      sendEmailViaBrevo(candidateEmailPayload),
     ]);
+
     const deliveryErrors = deliveryResults.filter((result) => result.status === "rejected");
     if (deliveryErrors.length > 0) {
-      throw new Error(deliveryErrors.map((result) => result.reason?.message || "Unknown mail delivery error").join("; "));
+      throw new Error(
+        deliveryErrors.map((result) => result.reason?.message || "Unknown Brevo delivery error").join("; ")
+      );
     }
 
-    console.log(`✓ [Titan Mail Dispatched] Submission delivered for candidate: ${candidate.name} (${candidate.email})`);
+    console.log(`✓ [Brevo Email Dispatched] Submission delivered for candidate: ${candidate.name} (${candidate.email})`);
     return { success: true };
   } catch (err) {
-    console.error("✗ [Titan Mail Dispatch Error - Candidate Application]:", err);
+    console.error("✗ [Brevo Email Dispatch Error - Candidate Application]:", err.message || err);
     throw err;
   }
 }
 
 /**
- * Notifies Titan Mail operations desk and employer of a new RFQ / Form submission with attached PDF
+ * Notifies operations desk and employer of a new RFQ / Form submission with attached PDF
+ * Uses Brevo HTTPS Transactional Email API.
  * @param {object} rfq - Saved RFQ document
  */
 export async function notifyNewRFQ(rfq) {
   try {
-    const transport = getTransporter();
-    const adminEmail = process.env.MAIL_TO || process.env.OPERATIONS_EMAIL || process.env.NOTIFICATION_EMAIL || process.env.EMAIL_USER || process.env.SMTP_USER || "career@profectusbizlink.com";
-    const senderAddress = process.env.EMAIL_USER || process.env.SMTP_USER || "career@profectusbizlink.com";
-    const senderEmail = `"Profectus BizLink" <${senderAddress}>`;
+    const adminEmail =
+      process.env.MAIL_TO ||
+      process.env.OPERATIONS_EMAIL ||
+      process.env.NOTIFICATION_EMAIL ||
+      process.env.BREVO_SENDER_EMAIL ||
+      process.env.EMAIL_USER ||
+      process.env.SMTP_USER ||
+      "career@profectusbizlink.com";
 
     // 1. Generate Corporate Form Submission PDF
     let pdfBuffer = null;
@@ -227,23 +176,23 @@ export async function notifyNewRFQ(rfq) {
     }
 
     const displayName = rfq.company || rfq.name || "Inquiry";
-    const sanitizedName = (rfq.name ? rfq.name.replace(/[^a-zA-Z0-9]/g, "_") : displayName.replace(/[^a-zA-Z0-9]/g, "_"));
+    const sanitizedName = rfq.name
+      ? rfq.name.replace(/[^a-zA-Z0-9]/g, "_")
+      : displayName.replace(/[^a-zA-Z0-9]/g, "_");
     const dateStr = getFormattedDate(rfq.createdAt || new Date());
     const pdfFilename = `BIZLINK_Submission_${sanitizedName}_${dateStr}.pdf`;
 
     const attachments = pdfBuffer
       ? [
           {
-            filename: pdfFilename,
+            name: pdfFilename,
             content: pdfBuffer,
-            contentType: "application/pdf",
           },
         ]
       : [];
 
     // 2. Notification to Bizlink Operations Desk (career@profectusbizlink.com)
-    const adminMailOptions = {
-      from: senderEmail,
+    const adminEmailPayload = {
       to: adminEmail,
       subject: `New BIZLINK Website Submission - ${displayName}`,
       text: `A new workforce requirement submission has been received via the PROFECTUS BIZLINK website. Please find the complete submission details attached as a PDF.\n\nCompany/Name: ${displayName}\nContact Person: ${rfq.name}\nEmail: ${rfq.email}\nPhone: ${rfq.phone}\nIndustry: ${rfq.industry || "—"}\nService: ${rfq.service || "—"}\nHeadcount: ${rfq.headcount || "—"}\nTimeline: ${rfq.timeline || "—"}`,
@@ -276,7 +225,7 @@ export async function notifyNewRFQ(rfq) {
             </div>
           </div>
           <div style="background: #F6F8FC; padding: 12px 20px; font-size: 11px; color: #94A3B8; text-align: center;">
-            Profectus BizLink Titan Mail Automated Dispatch
+            Profectus BizLink Brevo HTTPS Automated Dispatch
           </div>
         </div>
       `,
@@ -284,8 +233,7 @@ export async function notifyNewRFQ(rfq) {
     };
 
     // 3. Acknowledgment to Employer / Submitter with attached PDF
-    const employerMailOptions = {
-      from: senderEmail,
+    const employerEmailPayload = {
       to: rfq.email,
       subject: `Workforce Requirement Received - Profectus BizLink [${displayName}]`,
       html: `
@@ -316,18 +264,21 @@ export async function notifyNewRFQ(rfq) {
     };
 
     const deliveryResults = await Promise.allSettled([
-      transport.sendMail(adminMailOptions),
-      transport.sendMail(employerMailOptions),
+      sendEmailViaBrevo(adminEmailPayload),
+      sendEmailViaBrevo(employerEmailPayload),
     ]);
+
     const deliveryErrors = deliveryResults.filter((result) => result.status === "rejected");
     if (deliveryErrors.length > 0) {
-      throw new Error(deliveryErrors.map((result) => result.reason?.message || "Unknown mail delivery error").join("; "));
+      throw new Error(
+        deliveryErrors.map((result) => result.reason?.message || "Unknown Brevo delivery error").join("; ")
+      );
     }
 
-    console.log(`✓ [Titan Mail Dispatched] Submission delivered for ${displayName} (${rfq.email})`);
+    console.log(`✓ [Brevo Email Dispatched] Submission delivered for ${displayName} (${rfq.email})`);
     return { success: true };
   } catch (err) {
-    console.error("✗ [Titan Mail Dispatch Error - RFQ Submission]:", err);
+    console.error("✗ [Brevo Email Dispatch Error - RFQ Submission]:", err.message || err);
     throw err;
   }
 }
