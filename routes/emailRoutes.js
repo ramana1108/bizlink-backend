@@ -1,7 +1,28 @@
 import express from "express";
 import { sendEmailOtp, verifyEmailOtp } from "../services/otpService.js";
+import { checkBrevoAccountStatus } from "../services/emailService.js";
 
 const router = express.Router();
+
+/**
+ * GET /api/email/status
+ * Diagnostic endpoint to check Brevo API status and verified senders
+ */
+router.get("/status", async (req, res) => {
+  try {
+    const status = await checkBrevoAccountStatus();
+    return res.status(200).json({
+      success: true,
+      timestamp: new Date().toISOString(),
+      status,
+    });
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      error: err.message,
+    });
+  }
+});
 
 /**
  * POST /api/email/send-otp
@@ -30,7 +51,7 @@ router.post("/send-otp", async (req, res) => {
     console.error("Send OTP error:", error);
     return res.status(500).json({
       success: false,
-      message: "Unable to send verification email. Please try again later.",
+      message: error.message || "Unable to send verification email. Please try again later.",
     });
   }
 });

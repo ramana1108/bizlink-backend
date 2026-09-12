@@ -1,30 +1,11 @@
 import "dotenv/config";
-import nodemailer from "nodemailer";
 
 const BREVO_API_URL = "https://api.brevo.com/v3/smtp/email";
-let smtpTransporter;
-
-function getSmtpTransporter() {
-  if (!smtpTransporter) {
-    const port = Number(process.env.SMTP_PORT || 465);
-    smtpTransporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port,
-      secure: process.env.SMTP_SECURE === "true" || port === 465,
-      auth: {
-        user: process.env.SMTP_USER || process.env.EMAIL_USER,
-        pass: process.env.SMTP_PASS || process.env.EMAIL_PASS,
-      },
-    });
-  }
-
-  return smtpTransporter;
-}
 
 /**
- * Checks if the provided API key is a dummy placeholder or not configured.
+ * Checks if the provided API key is missing or an invalid placeholder.
  */
-function isDevApiKey(apiKey) {
+export function isInvalidApiKey(apiKey) {
   if (!apiKey) return true;
   const key = apiKey.trim().toLowerCase();
   return (
@@ -35,17 +16,12 @@ function isDevApiKey(apiKey) {
     key.includes("actual") ||
     key.includes("placeholder") ||
     key.includes("example") ||
-    key === "xkeysib-your_brevo_api_key_here" ||
-    key.length < 30
+    key.length < 20
   );
 }
 
 /**
- * Normalizes a recipient string or object into Brevo's { email, name } format.
- * Supports:
- * - "user@example.com"
- * - "John Doe <user@example.com>"
- * - { email: "user@example.com", name: "John Doe" }
+ * Normalizes a recipient into Brevo's [{ email, name }] format.
  */
 function normalizeRecipient(recipient) {
   if (!recipient) return null;
@@ -55,14 +31,14 @@ function normalizeRecipient(recipient) {
     const match = trimmed.match(/^(?:(.*?)<)?([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})>?$/);
     if (match) {
       const name = (match[1] || "").trim().replace(/^["']|["']$/g, "");
-      const email = match[2].trim();
+      const email = match[2].trim().toLowerCase();
       return name ? { email, name } : { email };
     }
-    return { email: trimmed };
+    return { email: trimmed.toLowerCase() };
   }
 
   if (typeof recipient === "object" && recipient.email) {
-    const result = { email: recipient.email.trim() };
+    const result = { email: recipient.email.trim().toLowerCase() };
     if (recipient.name) {
       result.name = recipient.name.trim();
     }
@@ -73,8 +49,7 @@ function normalizeRecipient(recipient) {
 }
 
 /**
- * Normalizes attachments into Brevo's { name, content (base64) } format.
- * Supports Buffer, base64 string, or data URI.
+ * Normalizes attachments into Brevo's [{ name, content (base64) }] format.
  */
 function normalizeAttachment(att) {
   if (!att) return null;
@@ -98,43 +73,7 @@ function normalizeAttachment(att) {
   return { name, content };
 }
 
-async function sendViaSmtp({ to, subject, html, text, attachments, senderName, senderEmail, replyTo }) {
-  const result = await getSmtpTransporter().sendMail({
-    from: { name: senderName, address: senderEmail },
-    to: to.map((recipient) =>
-      recipient.name
-        ? { name: recipient.name, address: recipient.email }
-        : recipient.email
-    ),
-    subject: subject || "Profectus BizLink Notification",
-    text,
-    html,
-    attachments: attachments.map((attachment) => ({
-      filename: attachment.name,
-      content: Buffer.from(attachment.content, "base64"),
-    })),
-    replyTo: replyTo ? normalizeRecipient(replyTo)?.email : undefined,
-  });
-
-  return { success: true, messageId: result.messageId };
-}
-
 /**
-
-    if (err.statusCode === 401 || err.statusCode === 403) {
-      console.warn("[Email Service] Brevo authentication failed. Falling back to SMTP.");
-      return sendViaSmtp({
-        to: toList,
-        subject,
-        html,
-        text,
-        attachments: normalizedAttachments,
-        senderName,
-        senderEmail,
-        replyTo,
-      });
-    }
-
  * Sends a transactional email using Brevo's REST API over HTTPS.
  *
  * @param {object} options
@@ -156,7 +95,7 @@ export async function sendEmailViaBrevo({
   sender,
   replyTo,
 }) {
-  const apiKey = (process.env.BREVO_API_KEY || "").trim();
+  const apiKey = (process.env.BREVO_API_KEY || "").trim().replace(/^["']|["']$/g, "");
 
   // 1. Resolve Sender
   const senderName =
@@ -164,12 +103,13 @@ export async function sendEmailViaBrevo({
     process.env.BREVO_SENDER_NAME ||
     "Profectus BizLink";
 
-  const senderEmail =
+  const senderEmail = (
     sender?.email ||
     process.env.BREVO_SENDER_EMAIL ||
     process.env.EMAIL_USER ||
     process.env.SMTP_USER ||
-    "career@profectusbizlink.com";
+    "career@profectusbizlink.com"
+  ).trim().replace(/^["']|["']$/g, "");
 
   // 2. Normalize Recipients
   const rawToList = Array.isArray(to) ? to : [to];
@@ -186,18 +126,33 @@ export async function sendEmailViaBrevo({
     .map(normalizeAttachment)
     .filter(Boolean);
 
-  // 4. Use SMTP when Brevo is not configured or is a placeholder.
-  if (isDevApiKey(apiKey)) {
-    return sendViaSmtp({
-      to: toList,
-      subject,
-      html,
-      text,
-      attachments: normalizedAttachments,
-      senderName,
-      senderEmail,
-      replyTo,
-    });
+  // 4. Handle Missing / Placeholder API Key
+  if (isInvalidApiKey(apiKey)) {
+    if (process.env.NODE_ENV === "production") {
+      console.error("[Email Service Error] BREVO_API_KEY is missing or invalid in production environment.");
+      throw new Error("BREVO_API_KEY is missing or invalid in production environment.");
+    }
+
+    // Local Development Fallback
+    console.log("\n================ [BREVO DEV / CONSOLE MODE] ================");
+    console.log(`Sender:      ${senderName} <${senderEmail}>`);
+    console.log(`To:          ${toList.map((r) => (r.name ? `${r.name} <${r.email}>` : r.email)).join(", ")}`);
+    console.log(`Subject:     ${subject}`);
+    console.log(
+      `Attachments: ${
+        normalizedAttachments.length > 0
+          ? normalizedAttachments.map((a) => `${a.name} (${Math.round((a.content.length * 3) / 4)} bytes)`).join(", ")
+          : "None"
+      }`
+    );
+    console.log(`Body:\n${text || "(HTML content provided)"}`);
+    console.log("============================================================\n");
+
+    return {
+      success: true,
+      messageId: `dev-brevo-${Date.now()}`,
+      devMode: true,
+    };
   }
 
   // 5. Construct Brevo API Payload
@@ -243,20 +198,24 @@ export async function sendEmailViaBrevo({
       body: JSON.stringify(payload),
     });
 
-    const responseData = await response.json().catch(() => ({}));
+    const responseText = await response.text();
+    let responseData = {};
+    try {
+      responseData = JSON.parse(responseText);
+    } catch {
+      responseData = { message: responseText };
+    }
 
     if (!response.ok) {
+      console.error(`[Brevo API Error] HTTP ${response.status} ${response.statusText}`);
+      console.error(`[Brevo API Error Details]:`, responseText);
+
       const errorMessage =
         responseData.message ||
         responseData.error ||
-        response.statusText ||
-        "Unknown Brevo API error";
-      console.error(
-        `✗ [Brevo HTTPS API Error (${response.status})]: ${errorMessage}`
-      );
-      const error = new Error(`Brevo API delivery failed (${response.status}): ${errorMessage}`);
-      error.statusCode = response.status;
-      throw error;
+        `HTTP ${response.status} ${response.statusText}`;
+      
+      throw new Error(`Brevo API delivery failed (${response.status}): ${errorMessage}`);
     }
 
     const messageId = responseData.messageId || `brevo-${Date.now()}`;
@@ -270,23 +229,79 @@ export async function sendEmailViaBrevo({
       data: responseData,
     };
   } catch (err) {
-    console.error("✗ [Brevo HTTPS Request Exception]:", err.message);
+    console.error("[Brevo HTTPS Request Exception]:", err.message);
+    throw err;
+  }
+}
 
-    if (err.statusCode === 401 || err.statusCode === 403) {
-      console.warn("[Email Service] Brevo authentication failed. Falling back to SMTP.");
-      return sendViaSmtp({
-        to: toList,
-        subject,
-        html,
-        text,
-        attachments: normalizedAttachments,
-        senderName,
+/**
+ * Checks Brevo account connectivity, API key validity, and verified senders.
+ */
+export async function checkBrevoAccountStatus() {
+  const apiKey = (process.env.BREVO_API_KEY || "").trim().replace(/^["']|["']$/g, "");
+  const senderEmail = (
+    process.env.BREVO_SENDER_EMAIL ||
+    process.env.EMAIL_USER ||
+    process.env.SMTP_USER ||
+    "career@profectusbizlink.com"
+  ).trim().replace(/^["']|["']$/g, "");
+
+  if (isInvalidApiKey(apiKey)) {
+    return {
+      configured: false,
+      status: "MISSING_OR_PLACEHOLDER_KEY",
+      message: "BREVO_API_KEY is not set or is a placeholder in the backend environment.",
+      senderEmail,
+    };
+  }
+
+  try {
+    // 1. Check account authentication
+    const accountRes = await fetch("https://api.brevo.com/v3/account", {
+      headers: { "api-key": apiKey, accept: "application/json" },
+    });
+    const accountData = await accountRes.json().catch(() => ({}));
+
+    if (!accountRes.ok) {
+      return {
+        configured: false,
+        status: "AUTHENTICATION_FAILED",
+        httpStatus: accountRes.status,
+        message: accountData.message || "Invalid Brevo API Key",
         senderEmail,
-        replyTo,
-      });
+      };
     }
 
-    throw err;
+    // 2. Check verified senders
+    const sendersRes = await fetch("https://api.brevo.com/v3/senders", {
+      headers: { "api-key": apiKey, accept: "application/json" },
+    });
+    const sendersData = await sendersRes.json().catch(() => ({}));
+    const sendersList = Array.isArray(sendersData.senders) ? sendersData.senders : [];
+
+    const isSenderVerified = sendersList.some(
+      (s) => s.email?.toLowerCase() === senderEmail.toLowerCase() && s.active === true
+    );
+
+    return {
+      configured: true,
+      status: "AUTHENTICATED",
+      accountEmail: accountData.email,
+      companyName: accountData.companyName,
+      senderEmail,
+      isSenderVerified,
+      verifiedSenders: sendersList.map((s) => ({ email: s.email, name: s.name, active: s.active })),
+      notice: isSenderVerified
+        ? "Sender email is active and verified in Brevo."
+        : `ATTENTION: Sender email '${senderEmail}' is not yet verified under Brevo -> Senders & IP -> Senders.`,
+    };
+  } catch (err) {
+    return {
+      configured: false,
+      status: "ERROR",
+      message: err.message,
+      senderEmail,
+    };
   }
 }
 
@@ -294,21 +309,12 @@ export async function sendEmailViaBrevo({
  * Checks the Brevo HTTPS Email configuration on startup.
  */
 export function verifyEmailService() {
-  const apiKey = (process.env.BREVO_API_KEY || "").trim();
-  const senderEmail =
-    process.env.BREVO_SENDER_EMAIL ||
-    process.env.EMAIL_USER ||
-    process.env.SMTP_USER ||
-    "career@profectusbizlink.com";
+  const apiKey = (process.env.BREVO_API_KEY || "").trim().replace(/^["']|["']$/g, "");
 
-  if (!isDevApiKey(apiKey)) {
-    console.log(
-      `✓ [Email Service] Brevo HTTPS Transactional API active (Sender: ${senderEmail})`
-    );
+  if (!isInvalidApiKey(apiKey)) {
+    console.log("[Email Service] Brevo API configured");
   } else {
-      console.log(
-        `ℹ️ [Email Service] BREVO_API_KEY is not set or is a placeholder. Using configured SMTP transport.`
-      );
+    console.warn("[Email Service] BREVO_API_KEY is missing");
   }
 }
 
