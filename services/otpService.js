@@ -262,22 +262,23 @@ If you did not request this verification code, you can safely ignore this email.
 
     const result = await sendEmailViaBrevo(mailPayload);
 
-    console.log(`[OTP] Email dispatched successfully. ID: ${result?.messageId || "N/A"}`);
+    console.log(`[OTP] Dispatch result for ${normalizedEmail}: ID=${result?.messageId || "N/A"}${result?.devMode ? " (simulated in console)" : " (delivered via Brevo)"}`);
 
     return {
       success: true,
       message: `Verification code sent to ${normalizedEmail}`,
       resendAfter: 60,
+      devMode: result?.devMode || false,
     };
   } catch (err) {
-    console.error(`[OTP] Failed to send verification email to ${normalizedEmail}:`, err.message);
+    console.error(`[OTP Error] Failed to send verification email to ${normalizedEmail}:`, err.message);
 
     // Remove stored OTP if email sending failed so user can immediately retry
     otpStore.delete(normalizedEmail);
 
     return {
       success: false,
-      message: "Unable to send verification email. Please try again later.",
+      message: err.message || "Unable to send verification email. Please try again later.",
     };
   }
 }

@@ -5,6 +5,39 @@ import { notifyNewCandidateApplication } from "../services/notificationService.j
 
 const router = express.Router();
 
+const ALLOWED_RESUME_EXTS = ["pdf", "doc", "docx", "txt"];
+const MAX_RESUME_SIZE = 5 * 1024 * 1024; // 5 MB
+
+function validateAndSanitizeAttachment(attachment, fallbackName = "") {
+  if (!attachment || !attachment.content) return null;
+
+  const rawName = attachment.name || fallbackName || "Resume.pdf";
+  const sanitizedName = rawName.replace(/[^a-zA-Z0-9._\- ]/g, "_").trim() || "Resume.pdf";
+  const ext = sanitizedName.split(".").pop().toLowerCase();
+
+  if (!ALLOWED_RESUME_EXTS.includes(ext)) {
+    console.warn(`[Attachment Validation] Ignored attachment with unsupported extension: .${ext}`);
+    return null;
+  }
+
+  // If content is base64 string, estimate size
+  if (typeof attachment.content === "string") {
+    const base64Data = attachment.content.includes(",")
+      ? attachment.content.split(",")[1]
+      : attachment.content;
+    const approximateBytes = (base64Data.length * 3) / 4;
+    if (approximateBytes > MAX_RESUME_SIZE + 2048) {
+      console.warn(`[Attachment Validation] Ignored attachment exceeding 5MB limit (${Math.round(approximateBytes)} bytes)`);
+      return null;
+    }
+  }
+
+  return {
+    name: sanitizedName,
+    content: attachment.content,
+  };
+}
+
 async function handleCandidateSubmission(req, res) {
   try {
     const {
@@ -33,11 +66,22 @@ async function handleCandidateSubmission(req, res) {
       additionalDetails,
       resumeFileName,
       resumeParsed,
+      resumeAttachment,
       verificationToken,
     } = req.body;
 
     console.log("========== CANDIDATE APPLICATION RECEIVED ==========");
     console.log(`Candidate: ${name}, Email: ${email}, Phone: ${phone}`);
+
+    // Validate uploaded resume attachment if present
+    const validatedResumeAttachment = validateAndSanitizeAttachment(
+      resumeAttachment,
+      resumeFileName
+    );
+
+    if (validatedResumeAttachment) {
+      console.log(`[Candidate Submission] Validated resume attachment: ${validatedResumeAttachment.name}`);
+    }
 
     // 1. Basic Required Fields Validation
     if (!name || !name.trim()) {
@@ -99,7 +143,7 @@ async function handleCandidateSubmission(req, res) {
       linkedin: linkedin ? linkedin.trim() : "",
       github: github ? github.trim() : "",
       additionalDetails: additionalDetails ? additionalDetails.trim() : "",
-      resumeFileName: resumeFileName ? resumeFileName.trim() : "",
+      resumeFileName: validatedResumeAttachment?.name || (resumeFileName ? resumeFileName.trim() : ""),
       resumeParsed: Boolean(resumeParsed),
       isEmailVerified: true,
     };
@@ -111,9 +155,9 @@ async function handleCandidateSubmission(req, res) {
     console.log("========== CANDIDATE SAVED SUCCESSFULLY ==========");
     console.log(`Database ID: ${savedCandidate._id}`);
 
-    // 5. Send Notification Alert with PDF to Merchant & Candidate via Brevo HTTPS API
+    // 5. Send Notification Alert with PDF and Uploaded Resume to Merchant & Candidate via Brevo HTTPS API
     try {
-      await notifyNewCandidateApplication(savedCandidate);
+      await notifyNewCandidateApplication(savedCandidate, validatedResumeAttachment);
     } catch (emailErr) {
       console.error("[Candidate Submission - Brevo Email Error] Email dispatch encountered an error:", emailErr.message);
     }

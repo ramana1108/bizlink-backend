@@ -210,10 +210,15 @@ export async function sendEmailViaBrevo({
       console.error(`[Brevo API Error] HTTP ${response.status} ${response.statusText}`);
       console.error(`[Brevo API Error Details]:`, responseText);
 
+      let hint = "";
+      if (response.status === 401) {
+        hint = " - Check if BREVO_API_KEY in backend/.env is correct and active in your Brevo account.";
+      } else if (response.status === 400 || response.status === 403) {
+        hint = ` - Ensure sender email (${senderEmail}) is verified in Brevo under Senders & IP -> Senders.`;
+      }
+
       const errorMessage =
-        responseData.message ||
-        responseData.error ||
-        `HTTP ${response.status} ${response.statusText}`;
+        (responseData.message || responseData.error || `HTTP ${response.status} ${response.statusText}`) + hint;
       
       throw new Error(`Brevo API delivery failed (${response.status}): ${errorMessage}`);
     }
@@ -250,8 +255,10 @@ export async function checkBrevoAccountStatus() {
     return {
       configured: false,
       status: "MISSING_OR_PLACEHOLDER_KEY",
-      message: "BREVO_API_KEY is not set or is a placeholder in the backend environment.",
+      message: "BREVO_API_KEY is not set or contains a placeholder in backend/.env.",
+      expectedEnvVar: "BREVO_API_KEY",
       senderEmail,
+      hint: "Add BREVO_API_KEY=xkeysib-... to backend/.env and restart the server.",
     };
   }
 
@@ -269,6 +276,7 @@ export async function checkBrevoAccountStatus() {
         httpStatus: accountRes.status,
         message: accountData.message || "Invalid Brevo API Key",
         senderEmail,
+        hint: "The BREVO_API_KEY provided was rejected by Brevo. Please generate a new API key from Brevo dashboard.",
       };
     }
 
@@ -310,11 +318,21 @@ export async function checkBrevoAccountStatus() {
  */
 export function verifyEmailService() {
   const apiKey = (process.env.BREVO_API_KEY || "").trim().replace(/^["']|["']$/g, "");
+  const senderEmail = (
+    process.env.BREVO_SENDER_EMAIL ||
+    process.env.EMAIL_USER ||
+    process.env.SMTP_USER ||
+    "career@profectusbizlink.com"
+  ).trim().replace(/^["']|["']$/g, "");
 
   if (!isInvalidApiKey(apiKey)) {
-    console.log("[Email Service] Brevo API configured");
+    console.log(`✓ [Email Service] Brevo HTTPS API configured successfully (Sender: ${senderEmail})`);
   } else {
-    console.warn("[Email Service] BREVO_API_KEY is missing");
+    console.warn(`⚠️  [Email Service] Brevo API key is missing or contains a placeholder in backend/.env`);
+    console.warn(`   • Expected environment variable: BREVO_API_KEY`);
+    console.warn(`   • Configured sender email: ${senderEmail}`);
+    console.warn(`   • In local development mode, OTPs and notifications will be logged to this console.`);
+    console.warn(`   • To deliver real emails, set BREVO_API_KEY=xkeysib-... in backend/.env and restart.`);
   }
 }
 
